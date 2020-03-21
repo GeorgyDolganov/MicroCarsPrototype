@@ -51,10 +51,10 @@ class Game{
             this.container.appendChild( this.stats.dom );
         }
 
-        // this.joystick = new JoyStick({
-        //     game:this,
-        //     onMove:this.joystickCallback
-        // });
+        this.joystick = new JoyStick({
+            game:this,
+            onMove:this.joystickCallback
+        });
 
         this.initPhysics();
     }
@@ -97,7 +97,7 @@ class Game{
             radius: 0.5,
             directionLocal: new CANNON.Vec3(0, -1, 0),
             suspensionStiffness: 30,
-            suspensionRestLenght: 0.3,
+            suspensionRestLength: 0.4,
             frictionSlip: 5,
             dampingRelaxation: 2.3,
             dampingCompression: 4.4,
@@ -158,8 +158,8 @@ class Game{
         this.vehicle = vehicle;
 
         let matrix = [];
-        let sizeX = 64,
-            sizeY = 64;
+        let sizeX = 128,
+            sizeY = 128;
         
         for (let i = 0; i < sizeX; i++) {
             matrix.push([]);
@@ -184,6 +184,56 @@ class Game{
         this.animate();
     }
 
+    joystickCallback( forward, turn ){
+        this.js.forward = forward;
+        this.js.turn = -turn;
+    }
+
+    updateDrive( forward = this.js.forward, turn=this.js.turn ){
+
+        const maxSteerVal = 0.5;
+        const maxForce = 1000;
+        const breakFroce = 10;
+
+        const force = maxForce * forward;
+        const steer = maxSteerVal * turn;
+        
+        if (forward!=0){
+            this.vehicle.setBrake(0, 0);
+            this.vehicle.setBrake(0, 1);
+            this.vehicle.setBrake(0, 2);
+            this.vehicle.setBrake(0, 3);
+
+            this.vehicle.applyEngineForce(force, 2);
+            this.vehicle.applyEngineForce(force, 3);
+        }else{
+            this.vehicle.setBrake(breakFroce,0);
+            this.vehicle.setBrake(breakFroce,1);
+            this.vehicle.setBrake(breakFroce,2);
+            this.vehicle.setBrake(breakFroce,3);
+        }
+
+        this.vehicle.setSteeringValue(steer, 0);
+        this.vehicle.setSteeringValue(steer, 1);
+    }
+
+    onWindowResize() {
+        this.camera.aspect = window.innerWidth / window.innerHeight;
+        this.camera.updateProjectionMatrix();
+
+        this.renderer.setSize( window.innerWidth, window.innerHeight );
+
+    }
+
+    updateCamera() {
+        this.camera.position.lerp(this.followCam.getWorldPosition(new THREE.Vector3()), 0.05);
+        this.camera.lookAt(this.vehicle.chassisBody.threemesh.position);
+        if (this.helper.sun!=undefined){
+            this.helper.sun.position.copy( this.camera.position );
+            this.helper.sun.position.y += 10;
+        }
+    }
+
     animate(){
         const game = this;
 
@@ -198,8 +248,8 @@ class Game{
         this.world.step(this.fixedTimeStep, dt);
         this.helper.updateBodies(this.world);
 
-        // this.updateDrive();
-        //this.updateCamera();
+        this.updateDrive();
+        this.updateCamera();
 
         this.renderer.render( this.scene, this.camera );
         
@@ -207,6 +257,95 @@ class Game{
 
     }
 }
+
+class JoyStick{
+	constructor(options){
+		const circle = document.createElement("div");
+		circle.style.cssText = "position:absolute; bottom:35px; width:80px; height:80px; background:#ADBDFF; border:#B74F6F solid medium; border-radius:50%; left:50%; transform:translateX(-50%);";
+		const thumb = document.createElement("div");
+		thumb.style.cssText = "position: absolute; left: 20px; top: 20px; width: 40px; height: 40px; border-radius: 50%; background: #B74F6F;";
+		circle.appendChild(thumb);
+		document.body.appendChild(circle);
+		this.domElement = thumb;
+		this.maxRadius = options.maxRadius || 40;
+		this.maxRadiusSquared = this.maxRadius * this.maxRadius;
+		this.onMove = options.onMove;
+		this.game = options.game;
+		this.origin = { left:this.domElement.offsetLeft, top:this.domElement.offsetTop };
+		this.rotationDamping = options.rotationDamping || 0.06;
+		this.moveDamping = options.moveDamping || 0.01;
+		if (this.domElement!=undefined){
+			const joystick = this;
+			if ('ontouchstart' in window){
+				this.domElement.addEventListener('touchstart', function(evt){ joystick.tap(evt); });
+			}else{
+				this.domElement.addEventListener('mousedown', function(evt){ joystick.tap(evt); });
+			}
+		}
+	}
+	
+	getMousePosition(evt){
+		let clientX = evt.targetTouches ? evt.targetTouches[0].pageX : evt.clientX;
+		let clientY = evt.targetTouches ? evt.targetTouches[0].pageY : evt.clientY;
+		return { x:clientX, y:clientY };
+	}
+	
+	tap(evt){
+		evt = evt || window.event;
+		// get the mouse cursor position at startup:
+		this.offset = this.getMousePosition(evt);
+		const joystick = this;
+		if ('ontouchstart' in window){
+			document.ontouchmove = function(evt){ joystick.move(evt); };
+			document.ontouchend =  function(evt){ joystick.up(evt); };
+		}else{
+			document.onmousemove = function(evt){ joystick.move(evt); };
+			document.onmouseup = function(evt){ joystick.up(evt); };
+		}
+	}
+	
+	move(evt){
+		evt = evt || window.event;
+		const mouse = this.getMousePosition(evt);
+		// calculate the new cursor position:
+		let left = mouse.x - this.offset.x;
+		let top = mouse.y - this.offset.y;
+		//this.offset = mouse;
+		
+		const sqMag = left*left + top*top;
+		if (sqMag>this.maxRadiusSquared){
+			//Only use sqrt if essential
+			const magnitude = Math.sqrt(sqMag);
+			left /= magnitude;
+			top /= magnitude;
+			left *= this.maxRadius;
+			top *= this.maxRadius;
+		}
+		// set the element's new position:
+		this.domElement.style.top = `${top + this.domElement.clientHeight/2}px`;
+		this.domElement.style.left = `${left + this.domElement.clientWidth/2}px`;
+		
+		const forward = -(top - this.origin.top + this.domElement.clientHeight/2)/this.maxRadius;
+		const turn = (left - this.origin.left + this.domElement.clientWidth/2)/this.maxRadius;
+		
+		if (this.onMove!=undefined) this.onMove.call(this.game, forward, turn);
+	}
+	
+	up(evt){
+		if ('ontouchstart' in window){
+			document.ontouchmove = null;
+			document.touchend = null;
+		}else{
+			document.onmousemove = null;
+			document.onmouseup = null;
+		}
+		this.domElement.style.top = `${this.origin.top}px`;
+		this.domElement.style.left = `${this.origin.left}px`;
+		
+		this.onMove.call(this.game, 0, 0);
+	}
+}
+
 
 class CannonHelper{
     constructor(scene){
